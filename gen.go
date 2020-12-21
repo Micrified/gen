@@ -14,7 +14,9 @@ import (
 	"strings"
 
 	// Custom packages
-	"rosgraph/app"
+	"app"
+	"ops"
+	"graph"
 )
 
 /*
@@ -57,6 +59,37 @@ type Build struct {
 	Sources        []string          // Source files to compile with executables
 	Libraries      []string          // Libraries to link with executables
 	Executors      []ROS_Executor    // ROS executable structures
+}
+
+/*
+ *******************************************************************************
+ *                          Graphviz Type Definitions                          *
+ *******************************************************************************
+*/
+
+type Link struct {
+	From      int                    // Source node
+	To        int                    // Destination node
+	Color     string                 // Link color
+	Label     string                 // Link label
+}
+
+type Node struct {
+	Id        int                    // Node ID
+	Label     string                 // Label for the node
+	Style     string                 // Border style
+	Fill      string                 // Color indicating fill of the node
+	Shape     string                 // Shape of the node
+}
+
+type Graphviz_graph struct {
+	Nodes     []Node                 // Nested clusters
+	Links     []Link                 // Slice of links
+}
+
+type Graphviz_application struct {
+	App       *app.Application       // Application structure
+	Links     []Link                 // Slice of links
 }
 
 /*
@@ -167,7 +200,7 @@ func GenerateTemplate (data interface{}, in_path, out_path string) error {
 }
 
 func GenerateApplication (a *app.Application, path string, meta Metadata, 
-	data Graphdata) error {
+	graph_data Graphdata) error {
 	var err error = nil
 
 	// Closure: Attempts to make all given directories
@@ -251,32 +284,138 @@ func GenerateApplication (a *app.Application, path string, meta Metadata,
 
 	// Generate package descriptor file
 	err = GenerateTemplate(build, "templates/package.tmpl", root_dir + "/package.xml")
+	if nil != err {
+		return errors.New("Unable to generate package XML file: " + err.Error())
+	}
 
 	// Copy in libraries, headers, and source files
 	err = copy_files_to(meta.Libraries, lib_dir)
 	if nil != err {
-		return err
+		return errors.New("Unable to copy in libraries/header/src-files: " + err.Error())
 	}
 	err = copy_files_to(meta.Headers, include_dir_2)
 	if nil != err {
-		return err
+		return errors.New("Unable to copy headers to include dir: " + err.Error())
 	}
 	err = copy_files_to(meta.Sources, src_dir)
+	if nil != err {
+		return errors.New("Unable to copy source files to src dir: " + err.Error())
+	}
 
 	// Generate the launch file
-	err = GenerateTemplate(build, "templates/launch.tmpl", launch_dir + "/" + build.Name + "_launch.py")
+	err = GenerateTemplate(build, "templates/launch.tmpl", 
+		launch_dir + "/" + build.Name + "_launch.py")
+	if nil != err {
+		return errors.New("Unable to generate launch file: " + err.Error())
+	}
 
-	// Generate the graphs
+	// Generate the chains graph
+	graphviz_graph, err := graph_to_graphviz(graph_data)
+	if nil != err {
+		return errors.New("Unable to generate graphviz graph file: " + 
+			err.Error())
+	}
+	err = GenerateWithCommand(path + "/templates/graph.dt", "dot", 
+		[]string{"-Tpng", "-o", assets_dir + "/graph.png"}, graphviz_graph)
+	if nil != err {
+		return errors.New("Unable to generate graph dot file: " +
+			err.Error())
+	}
 
-	return err
+	// Generate the application graph
+	graphviz_application, err := application_to_graphviz(a, graph_data.Graph)
+	if nil != err {
+		return errors.New("Unable to generate graphviz application file: " + 
+			err.Error())
+	}
+	err = GenerateWithCommand(path + "/templates/application.dt", "dot", 
+		[]string{"-Tpng", "-o", assets_dir + "/application.png"}, 
+		graphviz_application)
+	if nil != err {
+		return errors.New("Unable to generate application dot file: " + 
+			err.Error())
+	}
+
+	return nil
+}
+
+/*
+ *******************************************************************************
+ *                         Private Graphviz Functions                          *
+ *******************************************************************************
+*/
+
+// Converts internal graph representation to graphviz application data structure
+func application_to_graphviz (a *app.Application, g *graph.Graph) (Graphviz_application, error) {
+	links := []Link{}
+
+	// Create all links
+	for i := 0; i < g.Len(); i++ {
+		for j := 0; j < g.Len(); j++ {
+			edges := ops.EdgesAt(i, j, g)
+			for _, e := range edges {
+				label := fmt.Sprintf("%d.%d", e.Tag, e.Num)
+				links = append(links, Link{From: i, To: j, Color: e.Color, Label: label})
+			}
+		}
+	}
+
+	return Graphviz_application{App: a, Links: links}, nil
+}
+
+// Converts internal graph representation to graphviz data structure
+func graph_to_graphviz (graph_data Graphdata) (Graphviz_graph, error) {
+	nodes := []Node{}
+	links := []Link{}
+
+	// Closure: Returns true if the given chain has a length of one
+	length_one_chain := func (row int) bool {
+		return graph_data.Chains[ops.ChainForRow(row, graph_data.Chains)] == 1
+	}
+
+	// Obtain the number of nodes that belong to chains
+	n_chain_nodes := ops.NodeCount(graph_data.Chains)
+
+	// Create all nodes (but only if connected or chain has length 1)
+	for i := 0; i < graph_data.Graph.Len(); i++ {
+		if !ops.Disconnected(i, graph_data.Graph) || length_one_chain(i) {
+
+			// It's a chain node if below the original graph node count
+			if i < n_chain_nodes {
+				label := fmt.Sprintf("N%d\n(wcet=%.2f)\nprio=%d", i, graph_data.Node_wcet_map[i], 
+					graph_data.Node_prio_map[i])
+				nodes = append(nodes, 
+					Node{Id: i, Label: label, Style: "filled", Fill: "#FFFFFF", Shape: "circle"})
+			} else {
+				label := fmt.Sprintf("N%d\n(SYNC)", i)
+				nodes = append(nodes, 
+					Node{Id: i, Label: label, Style: "filled", Fill: "#FFE74C", Shape: "diamond"})
+			}
+		
+		}
+	}
+
+	// Create all links
+	for i := 0; i < graph_data.Graph.Len(); i++ {
+		for j := 0; j < graph_data.Graph.Len(); j++ {
+			edges := ops.EdgesAt(i, j, graph_data.Graph)
+			for _, e := range edges {
+				label := fmt.Sprintf("%d.%d", e.Tag, e.Num)
+				links = append(links, Link{From: i, To: j, Color: e.Color, Label: label})
+			}
+		}
+	}
+
+	return Graphviz_graph{Nodes: nodes, Links: links}, nil
 }
 
 
 /*
  *******************************************************************************
- *                        Private Function Definitions                         *
+ *                          Private Support Functions                          *
  *******************************************************************************
 */
+
 
 // Copies a file 
 func copy_file (from, to string) error {
