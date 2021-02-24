@@ -30,6 +30,7 @@ type ROS_Executor struct {
 	MsgType        string           // Program message type
 	FilterPolicy   string           // Policy for message filters
 	PPE            bool             // Whether to use PPE types and semantics
+	PPE_levels     int              // How many priority levels to use with PPE
 	Executor       app.Executor     // The executor to parse
 	Duration_us    int64            // Duration (in us) to run the executor
 }
@@ -39,16 +40,18 @@ type Metadata struct {
 	Includes       []string          // Include directives for C++ program
 	MsgType        string            // Program message type
 	PPE            bool              // Whether to use PPE types and semantics
+	PPE_levels     int               // How many priority levels to use with PPE
 	FilterPolicy   string            // Policy for message filters
 	Libraries      []string          // Path to static libraries to link/copy in
 	Headers        []string          // Paths to headers files to copy in
 	Sources        []string          // Paths to source files to copy in
 	Duration_us    int64             // Duration (in us) to run the executor
+	Logging_mode   int               // Log (0: none, 1: callbacks, 2: chains)
 }
 
 type Graphdata struct {
 	Chains         []int             // Slice of chain-lengths, index is chain
-	Node_wcet_map  map[int]float64   // Mapping from node to wcet (us)
+	Node_wcet_map  map[int]int64     // Mapping from node to wcet (us)
 	Node_prio_map  map[int]int       // Mapping from node to priority
 	Graph          *graph.Graph      // Graph representing node relations
 }
@@ -134,6 +137,7 @@ func GenerateWithCommand (path, command string, args []string,
 	cmd.Stdin = r
 
 	// Run the command in a goroutine
+	// TODO: Error check here
 	go func() {
 		cmd.Run()
 		r.Close()
@@ -248,11 +252,14 @@ func GenerateApplication (a *app.Application, path string, meta Metadata,
 			MsgType:      meta.MsgType,
 			FilterPolicy: meta.FilterPolicy,
 			PPE:          meta.PPE,
+			PPE_levels:   meta.PPE_levels,
 			Executor:     exec,
 			Duration_us:  meta.Duration_us,
 		}
 		executors = append(executors, ros_exec)
-		err = GenerateTemplate(ros_exec, path + "/templates/executor.tmpl", 
+
+		exec_template_file_name := fmt.Sprintf("executor_%d.tmpl", meta.Logging_mode)
+		err = GenerateTemplate(ros_exec, path + "/templates/" + exec_template_file_name, 
 			src_dir + "/" + ros_exec_name)
 		if nil != err {
 			return errors.New("Unable to generate source file: " + err.Error())
@@ -277,13 +284,13 @@ func GenerateApplication (a *app.Application, path string, meta Metadata,
 	}
 
 	// Generate makefile
-	err = GenerateTemplate(build, "templates/CMakeLists.tmpl", root_dir + "/CMakeLists.txt")
+	err = GenerateTemplate(build, path + "/templates/CMakeLists.tmpl", root_dir + "/CMakeLists.txt")
 	if nil != err {
 		return errors.New("Unable to generate CMakeLists: " + err.Error())
 	}
 
 	// Generate package descriptor file
-	err = GenerateTemplate(build, "templates/package.tmpl", root_dir + "/package.xml")
+	err = GenerateTemplate(build, path + "/templates/package.tmpl", root_dir + "/package.xml")
 	if nil != err {
 		return errors.New("Unable to generate package XML file: " + err.Error())
 	}
@@ -303,7 +310,7 @@ func GenerateApplication (a *app.Application, path string, meta Metadata,
 	}
 
 	// Generate the launch file
-	err = GenerateTemplate(build, "templates/launch.tmpl", 
+	err = GenerateTemplate(build, path + "/templates/launch.tmpl", 
 		launch_dir + "/" + build.Name + "_launch.py")
 	if nil != err {
 		return errors.New("Unable to generate launch file: " + err.Error())
@@ -382,7 +389,7 @@ func graph_to_graphviz (graph_data Graphdata) (Graphviz_graph, error) {
 
 			// It's a chain node if below the original graph node count
 			if i < n_chain_nodes {
-				label := fmt.Sprintf("N%d\n(wcet=%.2f)\nprio=%d", i, graph_data.Node_wcet_map[i], 
+				label := fmt.Sprintf("N%d\n(wcet=%d us)\nprio=%d", i, graph_data.Node_wcet_map[i], 
 					graph_data.Node_prio_map[i])
 				nodes = append(nodes, 
 					Node{Id: i, Label: label, Style: "filled", Fill: "#FFFFFF", Shape: "circle"})
