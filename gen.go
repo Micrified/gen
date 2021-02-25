@@ -29,7 +29,7 @@ type ROS_Executor struct {
 	Includes       []string         // Include directives for C++ program
 	MsgType        string           // Program message type
 	FilterPolicy   string           // Policy for message filters
-	PPE            bool             // Whether to use PPE types and semantics
+	PPE            int              // (0: none, 1: producer-consumer, 2: thread-dispatch)
 	PPE_levels     int              // How many priority levels to use with PPE
 	Executor       app.Executor     // The executor to parse
 	Duration_us    int64            // Duration (in us) to run the executor
@@ -39,7 +39,7 @@ type Metadata struct {
 	Packages       []string          // Packages to include in makefile
 	Includes       []string          // Include directives for C++ program
 	MsgType        string            // Program message type
-	PPE            bool              // Whether to use PPE types and semantics
+	PPE            int               // (0: none, 1: producer-consumer, 2: thread-dispatch)
 	PPE_levels     int               // How many priority levels to use with PPE
 	FilterPolicy   string            // Policy for message filters
 	Libraries      []string          // Path to static libraries to link/copy in
