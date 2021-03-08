@@ -394,7 +394,7 @@ func graph_to_graphviz (graph_data Graphdata) (Graphviz_graph, error) {
 				nodes = append(nodes, 
 					Node{Id: i, Label: label, Style: "filled", Fill: "#FFFFFF", Shape: "circle"})
 			} else {
-				label := fmt.Sprintf("N%d\n(SYNC)", i)
+				label := fmt.Sprintf("N%d\n(SYNC)\nprio=%d", i, graph_data.Node_prio_map[i])
 				nodes = append(nodes, 
 					Node{Id: i, Label: label, Style: "filled", Fill: "#FFE74C", Shape: "diamond"})
 			}
